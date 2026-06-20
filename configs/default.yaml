@@ -1,0 +1,14 @@
+datasets: [inj_cora, disney, reddit]
+seeds: [0, 1, 2, 3, 4]
+epochs: 100
+lr: 0.001
+hid_dim: 64
+num_layers: 2
+backbone: sage
+mask_rate: 0.5
+score_rounds: 10
+# Paths (override on CLI if different)
+unprompt_dir: D:\notes\graph_anomaly\UNPrompt\Datasets
+cora_root: D:\notes\graph_anomaly\data_cache\cora
+books_path: null
+books_fallback: reddit

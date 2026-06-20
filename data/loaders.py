@@ -5,9 +5,9 @@ import scipy.io as sio
 import scipy.sparse as sp
 import torch
 from torch_geometric.data import Data
-from torch_geometric.datasets import Planetoid
+from torch_geometric.datasets import HeterophilousGraphDataset, Planetoid
 from torch_geometric.utils import (from_scipy_sparse_matrix, remove_self_loops,
-                                    to_undirected)
+                                    subgraph, to_undirected)
 
 # Datasets shipped in the cloned UNPrompt repo (filenames are capitalized).
 _MAT_FILES = {
@@ -84,13 +84,90 @@ def load_inj_cora(root: str, seed: int = 0, n_struct_cliques: int = 15,
     return Data(x=x, edge_index=edge_index, y=y)
 
 
+# Organic (non-injected) GADBench-scale datasets, loaded via torch_geometric downloads.
+# Anomaly = the minority/positive class; all carry real (not synthetic) anomaly labels.
+_HETEROPHILOUS = {"tolokers": "Tolokers", "questions": "Questions"}
+
+
+def load_heterophilous(name: str, root: str) -> Data:
+    """Tolokers / Questions from the heterophilous-graph benchmark as binary-label GAD.
+
+    y is the native binary node label (Tolokers: banned workers ~22%; Questions: active
+    users ~3%). Edges made undirected, self-loops removed.
+    """
+    ds = HeterophilousGraphDataset(root=root, name=_HETEROPHILOUS[name.lower()])
+    g = ds[0]
+    edge_index = to_undirected(remove_self_loops(g.edge_index)[0])
+    y = (g.y.ravel() != 0).long()
+    return Data(x=g.x.float(), edge_index=edge_index, y=y)
+
+
+_ELLIPTIC_URL = "https://data.pyg.org/datasets/elliptic"
+_ELLIPTIC_FILES = ["elliptic_txs_features.csv", "elliptic_txs_edgelist.csv",
+                   "elliptic_txs_classes.csv"]
+
+
+def load_elliptic(root: str) -> Data:
+    """Elliptic bitcoin transaction graph; illicit=1 vs licit=0 on the *labeled* subgraph.
+
+    Parses the raw CSVs directly with numpy (no pandas / pygod dependency), downloading
+    them on first use. Unknown-class nodes (the majority) are dropped and the graph induced
+    on labeled nodes, so every node carries a real fraud/non-fraud label for per-node scoring.
+    The 165 transaction features are kept (timestep column dropped).
+    """
+    raw = os.path.join(root, "raw")
+    feat_csv = os.path.join(raw, "elliptic_txs_features.csv")
+    if not os.path.exists(feat_csv):
+        from torch_geometric.data import download_url, extract_zip
+        os.makedirs(raw, exist_ok=True)
+        for f in _ELLIPTIC_FILES:
+            path = download_url("%s/%s.zip" % (_ELLIPTIC_URL, f), raw)
+            extract_zip(path, raw)
+
+    feats = np.genfromtxt(feat_csv, delimiter=",", dtype=np.float64)
+    tx_ids = feats[:, 0].astype(np.int64)
+    x = feats[:, 2:]  # drop txId and timestep; keep the 165 features
+
+    cls = np.genfromtxt(os.path.join(raw, "elliptic_txs_classes.csv"), delimiter=",",
+                        dtype=str, skip_header=1)
+    cls_map = {int(t): c for t, c in cls}
+    id_to_idx = {int(t): i for i, t in enumerate(tx_ids)}
+
+    # class "1" = illicit -> 1, "2" = licit -> 0, "unknown" -> drop
+    y = np.full(len(tx_ids), -1, dtype=np.int64)
+    for t, c in cls_map.items():
+        if c == "1":
+            y[id_to_idx[t]] = 1
+        elif c == "2":
+            y[id_to_idx[t]] = 0
+
+    edges = np.genfromtxt(os.path.join(raw, "elliptic_txs_edgelist.csv"), delimiter=",",
+                          dtype=np.int64, skip_header=1)
+    e0 = np.array([id_to_idx[t] for t in edges[:, 0]])
+    e1 = np.array([id_to_idx[t] for t in edges[:, 1]])
+    edge_index = torch.tensor(np.stack([e0, e1]), dtype=torch.long)
+
+    keep = torch.tensor(y >= 0)
+    sub_ei, _ = subgraph(keep, edge_index, relabel_nodes=True, num_nodes=len(tx_ids))
+    sub_ei = to_undirected(remove_self_loops(sub_ei)[0])
+    x = torch.tensor(x[y >= 0], dtype=torch.float)
+    return Data(x=x, edge_index=sub_ei, y=torch.tensor(y[y >= 0], dtype=torch.long))
+
+
 def load_dataset(name: str, *, unprompt_dir: str, cora_root: str,
-                 books_path: str | None = None, seed: int = 0) -> Data:
+                 books_path: str | None = None, pyg_root: str | None = None,
+                 seed: int = 0) -> Data:
     if name == "inj_cora":
         return load_inj_cora(cora_root, seed=seed)
     key = name.lower()
     if key in _MAT_FILES:
         return load_mat(os.path.join(unprompt_dir, _MAT_FILES[key]))
+    if key in _HETEROPHILOUS:
+        root = pyg_root or os.path.dirname(cora_root)
+        return load_heterophilous(key, os.path.join(root, key))
+    if key == "elliptic":
+        root = pyg_root or os.path.dirname(cora_root)
+        return load_elliptic(os.path.join(root, "elliptic"))
     if key == "books":
         if books_path is None:
             raise FileNotFoundError(

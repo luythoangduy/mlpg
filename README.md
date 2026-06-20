@@ -50,6 +50,12 @@ facebook 0.482 → 0.921), which is the direction worth pursuing.
    candidate bank recovers near-oracle AUC and fixes the inversion (facebook 0.482 → 0.921
    at k=3; amazon → 0.885; inj_cora → 0.709). Largest gains on structure-dominant graphs.
 
+7. **Upgrading the detector bank ([BANK.md](BANK.md)) — negative on these benchmarks.**
+   Adding stronger training-free detectors (PCA, LOF, spectral) does **not** raise the oracle
+   on any dataset — the injected anomalies are trivial (degree/feature swaps) and the trivial
+   detectors already match them. The ceiling here is set by the *benchmark*, not the bank;
+   raising absolute AUC needs harder/real datasets, not more detectors.
+
 ### Per-graph channel AUC (learning-free channels)
 
 | dataset  | struct (`-deg`) | feat (1-hop non-smooth) | oracle (best) | best *learned* method |
@@ -98,14 +104,16 @@ mlpgad/
   run_poc.py              grid runner {dataset x method x toggle x seed} -> CSV
   router_perturbation.py  perturbation-response channel-router experiment
   fewshot_channel.py      few-shot channel identification experiment (positive)
+  detectors.py            stronger training-free detector bank + bank comparison
   configs/default.yaml    experiment config
-  tests/                  18 unit tests (pytest)
+  tests/                  20 unit tests (pytest)
   RESULTS.md              PoC results + C1-C4 verdict
   INVESTIGATION.md        channel crossover analysis
   ROUTER.md               channel-router PoC, marginal statistics (negative)
   ROUTER_PERTURBATION.md  perturbation-response router (negative)
   MERGE.md                merge vs select (merge dominated by select)
   FEWSHOT.md              few-shot channel identification (positive, working direction)
+  BANK.md                 stronger detector bank (negative on injected benchmarks)
   docs/                   approved design spec
   results/poc_results.csv raw per-seed AUC/AP
 ```

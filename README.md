@@ -56,6 +56,20 @@ facebook 0.482 → 0.921), which is the direction worth pursuing.
    detectors already match them. The ceiling here is set by the *benchmark*, not the bank;
    raising absolute AUC needs harder/real datasets, not more detectors.
 
+8. **Learned detector + organic datasets ([LEARNED.md](LEARNED.md)) — one organic win.**
+   Adding a learned reconstruction detector (DOMINANT-style GCN autoencoder) and three
+   **organic** datasets (Tolokers, Questions, Elliptic bitcoin fraud — all pure
+   `torch_geometric`, no pygod) confirms BANK.md and finds the lone exception. On the
+   trivially-injected graphs the learned channels just *reproduce* the trivial feature channel
+   (inj_cora `corr(learn_attr, feat_nonsmooth)=0.77`) and lose; the inner-product structure
+   recon is dominated by a one-line degree score (facebook 0.568 vs 0.921). But on organic
+   **Tolokers** the learned channel (0.614) **beats every trivial and strong detector**,
+   raising the oracle 0.582 → 0.614 — the only graph where a non-trivial detector wins, and
+   few-shot selects it. The learned *attribute* channel is also a much stronger feature
+   detector than PCA/LOF (amazon 0.876 vs 0.711; Elliptic 0.850 vs 0.814), just not above the
+   best trivial channel. Non-trivial detectors matter exactly where the benchmark stops being
+   trivial.
+
 ### Per-graph channel AUC (learning-free channels)
 
 | dataset  | struct (`-deg`) | feat (1-hop non-smooth) | oracle (best) | best *learned* method |
@@ -100,11 +114,12 @@ mlpgad/
   data/loaders.py         PyG loaders: .mat datasets + injected Cora (no pygod)
   models/mlpgad.py        masked latent-predictability model (mlp_frozen / gnn_ema, mask toggle)
   models/unprompt_baseline.py   neighborhood-predictability of raw attribute (UNPrompt-style)
+  models/dominant.py      learned DOMINANT-style recon detector (attr + structure channels)
   train.py                one-class trainer + multi-round node scorer
   run_poc.py              grid runner {dataset x method x toggle x seed} -> CSV
   router_perturbation.py  perturbation-response channel-router experiment
   fewshot_channel.py      few-shot channel identification experiment (positive)
-  detectors.py            stronger training-free detector bank + bank comparison
+  detectors.py            trivial + strong (training-free) + learned detector bank + tables
   configs/default.yaml    experiment config
   tests/                  20 unit tests (pytest)
   RESULTS.md              PoC results + C1-C4 verdict
@@ -113,7 +128,8 @@ mlpgad/
   ROUTER_PERTURBATION.md  perturbation-response router (negative)
   MERGE.md                merge vs select (merge dominated by select)
   FEWSHOT.md              few-shot channel identification (positive, working direction)
-  BANK.md                 stronger detector bank (negative on injected benchmarks)
+  BANK.md                 stronger training-free detector bank (negative on injected benchmarks)
+  LEARNED.md              learned detector + organic datasets (one organic win: Tolokers)
   docs/                   approved design spec
   results/poc_results.csv raw per-seed AUC/AP
 ```
@@ -131,9 +147,14 @@ python -m pytest mlpgad/tests -q
 
 # full PoC grid (100 epochs, 5 seeds, 3 datasets)
 python -m mlpgad.run_poc --config mlpgad/configs/default.yaml --out results/poc_results.csv
+
+# learned + organic bank tables (trains/caches DOMINANT, prints channel + few-shot tables)
+python -m mlpgad.detectors inj_cora disney reddit amazon facebook tolokers questions elliptic
 ```
 
-Point `configs/default.yaml: unprompt_dir` at the folder containing the `.mat` files.
+Point `configs/default.yaml: unprompt_dir` at the folder containing the `.mat` files. The
+organic datasets (Tolokers, Questions, Elliptic) download automatically via
+`torch_geometric` into `data_cache/` on first use.
 
 ## Provenance
 

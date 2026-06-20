@@ -8,9 +8,11 @@ keep* an idea quickly, plus the follow-up investigation that reframed the proble
 
 **TL;DR of the result:** the masked-predictability idea does **not** beat trivial baselines,
 and its differentiator over UNPrompt is within noise. The investigation found the real,
-high-value, open problem: **per-graph channel routing** — anomalies live in the structural
-*or* feature channel depending on the graph, using the wrong one *inverts* the score, and
-no simple unsupervised statistic selects the right channel across graphs.
+high-value problem: **per-graph channel selection** — anomalies live in the structural *or*
+feature channel depending on the graph, and using the wrong one *inverts* the score. This is
+unsolvable zero-shot (no marginal statistic, perturbation-response, or merge works), but
+**few-shot solves it**: 3–5 labeled anomalies per graph recover near-oracle AUC (e.g.
+facebook 0.482 → 0.921), which is the direction worth pursuing.
 
 ## Findings at a glance
 
@@ -39,6 +41,15 @@ no simple unsupervised statistic selects the right channel across graphs.
    Competence (detectability of injected type) does not predict relevance (real-anomaly
    channel).
 
+5. **Merge instead of select ([MERGE.md](MERGE.md)):** the two channels are
+   redundant/competing, not complementary — even oracle-weighted merge only equals the best
+   single channel, and naive/max merges are worse than select everywhere.
+
+6. **Few-shot channel identification ([FEWSHOT.md](FEWSHOT.md)) — the positive result.**
+   With 3–5 labeled anomalies per graph, selecting + orienting the best channel from a
+   candidate bank recovers near-oracle AUC and fixes the inversion (facebook 0.482 → 0.921
+   at k=3; amazon → 0.885; inj_cora → 0.709). Largest gains on structure-dominant graphs.
+
 ### Per-graph channel AUC (learning-free channels)
 
 | dataset  | struct (`-deg`) | feat (1-hop non-smooth) | oracle (best) | best *learned* method |
@@ -65,10 +76,13 @@ amazon feature) it is *far* above any learned predictability method.
   ([MERGE.md](MERGE.md)). The two channels are redundant/competing, not complementary —
   even an oracle-weighted merge only equals the best single channel, and every label-free
   merge (naive/max) is worse than select. Merging does not escape the selection problem.
-- **In (open, tractable):** **few-shot channel identification** — with 1–5 labeled
-  anomalies per graph, pick/weight the channel whose ranking they top (oracle shows
-  0.59–0.92). This matches how strong generalist GAD methods (ARC, UNPrompt, AnomalyGFM)
-  import external signal about what is anomalous.
+- **In — validated ([FEWSHOT.md](FEWSHOT.md)):** **few-shot channel identification works.**
+  With 3–5 labeled anomalies per graph, selecting and orienting the best channel from a
+  candidate bank recovers near-oracle AUC and cures the inversion — e.g. facebook goes from
+  a useless 0.482 (naive feature) to **0.921 = oracle at k=3**. The largest gains are on
+  structure-dominant graphs where single-channel/zero-shot methods fail. This matches how
+  strong generalist GAD methods (ARC, UNPrompt, AnomalyGFM) import external signal about
+  what is anomalous.
 
 ## Repository layout
 
@@ -83,12 +97,15 @@ mlpgad/
   train.py                one-class trainer + multi-round node scorer
   run_poc.py              grid runner {dataset x method x toggle x seed} -> CSV
   router_perturbation.py  perturbation-response channel-router experiment
+  fewshot_channel.py      few-shot channel identification experiment (positive)
   configs/default.yaml    experiment config
-  tests/                  15 unit tests (pytest)
+  tests/                  18 unit tests (pytest)
   RESULTS.md              PoC results + C1-C4 verdict
   INVESTIGATION.md        channel crossover analysis
   ROUTER.md               channel-router PoC, marginal statistics (negative)
-  ROUTER_PERTURBATION.md  perturbation-response router (negative) + few-shot reframe
+  ROUTER_PERTURBATION.md  perturbation-response router (negative)
+  MERGE.md                merge vs select (merge dominated by select)
+  FEWSHOT.md              few-shot channel identification (positive, working direction)
   docs/                   approved design spec
   results/poc_results.csv raw per-seed AUC/AP
 ```

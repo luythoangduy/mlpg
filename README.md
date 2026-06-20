@@ -61,6 +61,10 @@ amazon feature) it is *far* above any learned predictability method.
   statistic routing and perturbation-response competence routing fail (below naive fusion).
   On a new graph with no labels the anomaly type is unidentifiable, and choosing the wrong
   channel inverts the score.
+- **Out (now tested):** *merging* both channels instead of selecting
+  ([MERGE.md](MERGE.md)). The two channels are redundant/competing, not complementary —
+  even an oracle-weighted merge only equals the best single channel, and every label-free
+  merge (naive/max) is worse than select. Merging does not escape the selection problem.
 - **In (open, tractable):** **few-shot channel identification** — with 1–5 labeled
   anomalies per graph, pick/weight the channel whose ranking they top (oracle shows
   0.59–0.92). This matches how strong generalist GAD methods (ARC, UNPrompt, AnomalyGFM)

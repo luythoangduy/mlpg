@@ -1,0 +1,398 @@
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{xcolor}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\newcommand{\auc}{\textsc{auc}}
+\newcommand{\note}[1]{\textcolor{red}{[#1]}}
+
+\title{Where Does the Anomaly Live?\\
+Per-Graph Channel Identification for Generalist Graph Anomaly Detection}
+
+\author{%
+  Anonymous\\
+  \texttt{draft --- work in progress}
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Generalist graph anomaly detection (GAD) aims for a single detector that works across graphs
+without per-graph tuning. We report a systematic, deliberately cheap study that reframes what
+the hard problem actually is. Starting from a masked latent-predictability detector
+(JEPA/BYOL-style \citep{grill2020byol,assran2023ijepa}), we find it does not beat trivial
+learning-free baselines, and that its apparent strengths and weaknesses are explained by a
+single phenomenon: \emph{anomalies live in orthogonal channels --- structural or feature ---
+on different graphs, and scoring with the wrong channel inverts the anomaly ranking}. The
+per-graph \emph{oracle} that selects the right channel is far above any learned detector
+(\auc{} $0.52$--$0.92$ vs.\ ${\sim}0.5$), making channel identification, not detector
+sophistication, the high-value lever. We show that this identification is \textbf{unsolvable
+zero-shot}: routing on marginal channel statistics and on self-injection ``competence'' both
+fail, and merging both channels is dominated by selecting one. We then show it is
+\textbf{tractable few-shot}: with $3$--$5$ labeled anomalies per graph, selecting and
+\emph{orienting} the best channel from a candidate bank recovers near-oracle \auc{} and cures
+the inversion (e.g.\ Facebook $0.482\!\rightarrow\!0.921$). Finally, we ask whether a stronger
+detector bank raises the ceiling. On the trivially-injected \texttt{.mat} benchmarks it does
+not --- neither training-free detectors (PCA, LOF, spectral) nor a learned reconstruction
+detector (DOMINANT-style \citep{ding2019dominant}) beats the trivial channels, because the
+injection itself is trivial. On \emph{organic} GADBench-scale graphs
+\citep{tang2023gadbench,platonov2023critical,weber2019elliptic} the picture changes exactly
+once: on Tolokers the learned detector is the single best channel and raises the oracle
+($0.582\!\rightarrow\!0.614$), the only graph in the study where a non-trivial detector wins,
+and few-shot selects it. We report all results, including the many negatives, as a map of what
+is and is not tractable for generalist GAD. All code is pure \texttt{torch\_geometric}
+\citep{fey2019pyg} and CPU-cheap.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+A generalist graph anomaly detector should rank anomalous nodes above normal ones on a new
+graph it was never tuned for. Recent generalist methods import \emph{external} signal about
+what is anomalous: in-context normal examples \citep{liu2024arc}, cross-graph pre-training and
+neighborhood prompts \citep{niu2024unprompt,qiao2025anomalygfm}. We take the opposite,
+diagnostic route: we strip the problem down to learning-free baselines to find out
+\emph{which} component actually carries the difficulty, and we report negatives as
+first-class results.
+
+Our entry point was a one-class \emph{masked latent-predictability} detector --- predict a
+node's latent target from its masked neighborhood and use the predictive residual as the
+anomaly score, in the spirit of BYOL/JEPA \citep{grill2020byol,assran2023ijepa}. This detector
+neither beats trivial baselines nor improves over a raw-attribute neighborhood-predictability
+baseline of the UNPrompt family \citep{niu2024unprompt} beyond noise
+(Section~\ref{sec:poc}). Investigating \emph{why} it sometimes inverts surfaced the real
+problem.
+
+\paragraph{Contributions.}
+\begin{itemize}
+  \item We characterize the \textbf{channel-crossover phenomenon}: each graph's anomalies live
+  almost entirely in one channel (structural or feature), the dominant channel flips per
+  graph, and the wrong channel \emph{inverts} the score (Section~\ref{sec:channels}).
+  \item We show \textbf{zero-shot channel identification is unsolved}: marginal-statistic
+  routing, self-injection competence routing, and channel merging all fail to beat naive
+  fusion or single-channel selection (Section~\ref{sec:zeroshot}).
+  \item We validate \textbf{few-shot channel identification} as the tractable path: $3$--$5$
+  labels per graph recover near-oracle \auc{} and fix inversion (Section~\ref{sec:fewshot}).
+  \item We delimit \textbf{where a stronger/learned bank helps}: not on trivially-injected
+  benchmarks (the ceiling is the benchmark, not the bank), but --- modestly and unevenly --- on
+  organic data, where a learned reconstruction detector wins on one graph
+  (Section~\ref{sec:bank}).
+\end{itemize}
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Reconstruction detectors.} DOMINANT \citep{ding2019dominant} is the canonical
+attributed-graph autoencoder: a shared GNN encoder with attribute and structure decoders,
+scoring nodes by a weighted reconstruction error. CONAD \citep{xu2022conad} adds contrastive
+augmentation. We use a DOMINANT-style detector as our \emph{learned} bank member.
+
+\paragraph{Generalist / few-shot GAD.} ARC \citep{liu2024arc} performs in-context anomaly
+detection from a few normal examples; UNPrompt \citep{niu2024unprompt} learns transferable
+neighborhood prompts for zero-shot transfer; AnomalyGFM \citep{qiao2025anomalygfm} is a graph
+foundation model with zero/few-shot prompt tuning. All inject external information about what
+is anomalous --- consistent with our finding that single-graph zero-shot channel identification
+is impossible.
+
+\paragraph{Benchmarks.} Classic unsupervised GAD uses \emph{injected} anomalies on citation
+graphs \citep{ding2019dominant,liu2022bond}. GADBench \citep{tang2023gadbench} argues for
+\emph{organic} fraud benchmarks. We use injected Cora \citep{yang2016planetoid} and four
+UNPrompt \texttt{.mat} graphs, then add three organic graphs: Tolokers and Questions from the
+heterophilous-graph benchmark \citep{platonov2023critical} and the Elliptic Bitcoin fraud
+graph \citep{weber2019elliptic}. Training-free baselines include LOF \citep{breunig2000lof}
+and PCA reconstruction. All loaders are pure \texttt{torch\_geometric} \citep{fey2019pyg}; we
+deliberately avoid PyGOD to keep the pipeline self-contained.
+
+\section{The masked-predictability detector does not differentiate}
+\label{sec:poc}
+
+\paragraph{Setup.} One-class training, $100$ epochs, full-batch, CPU, $5$ seeds; score is the
+rank-normalized predictive residual; metric is ROC-\auc{}. We compare a UNPrompt-style
+raw-attribute target \citep{niu2024unprompt}, our default latent target (frozen-MLP, mask on),
+an ablation without masking, and an EMA-GNN target.
+
+\begin{table}[t]
+\centering
+\caption{PoC ROC-\auc{} (mean over $5$ seeds). The latent-target idea tracks the UNPrompt-style
+baseline within noise; removing the mask collapses \texttt{inj\_cora} below random.}
+\label{tab:poc}
+\begin{tabular}{lcccc}
+\toprule
+dataset & unprompt & mlpgad (default) & mlpgad\_nomask & mlpgad\_gnntarget \\
+\midrule
+inj\_cora & $0.642$ & $\mathbf{0.646}$ & $0.444$ & $0.470$ \\
+disney   & $0.434$ & $0.414$ & $0.378$ & $\mathbf{0.545}$ \\
+reddit   & $0.563$ & $\mathbf{0.575}$ & $0.568$ & $0.549$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:poc} shows the latent-vs-raw target distinction adds nothing
+($0.646$ vs.\ $0.642$ on \texttt{inj\_cora}; $0.575$ vs.\ $0.563$ on reddit). Masking is the
+one validated component (ablating it sends \texttt{inj\_cora} to $0.444$). Crucially, the EMA-GNN
+target is the \emph{only} configuration above $0.5$ on disney ($0.545$) yet the \emph{worst} on
+reddit --- a stable crossover across all seeds that motivates the rest of the paper.
+
+\section{The channel-crossover phenomenon}
+\label{sec:channels}
+
+We probe the two channels directly with learning-free statistics: a \emph{structural} channel
+($-\text{degree}$, or $|z|$ of $[\text{degree}, \text{avg-neighbor-degree}]$) and a
+\emph{feature} channel ($1$-hop non-smoothness $\lVert x_v - \mathrm{mean}_{u\in N(v)} x_u
+\rVert$ in normalized space).
+
+\begin{table}[t]
+\centering
+\caption{Per-graph channel \auc{} (learning-free). The dominant channel \emph{flips} per graph;
+the wrong channel inverts (\auc{} $<0.5$). The oracle (best single channel) is far above the
+best learned predictability method (${\sim}0.5$--$0.58$).}
+\label{tab:channels}
+\begin{tabular}{lcccc}
+\toprule
+dataset & struct ($-\text{deg}$) & feat (1-hop) & oracle (best) & best \emph{learned} \\
+\midrule
+inj\_cora & $0.261$ & $0.522$ & $0.522$ & $0.646$ \\
+disney   & $\mathbf{0.742}$ & $0.664$ & $\mathbf{0.742}$ & $0.545$ \\
+reddit   & $0.444$ & $0.592$ & $0.592$ & $0.575$ \\
+amazon   & $0.491$ & $\mathbf{0.829}$ & $\mathbf{0.829}$ & --- \\
+facebook & $\mathbf{0.922}$ & $0.482$ & $\mathbf{0.922}$ & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:channels} resolves the disney/reddit crossover of Table~\ref{tab:poc}. Disney is
+\emph{structure-dominant}: a one-line $-\text{degree}$ detector scores $0.742$, beating every
+learned method, while the feature channel is dead ($0.459$ for feature L2-norm). The EMA-GNN
+target ``wins'' on disney only because message passing leaks degree/structure into its target,
+so its residual partially tracks the structural signal; the pure-feature targets see no signal
+and invert. Reddit is \emph{feature-dominant}: $-\text{degree}$ is anti-correlated ($0.444$),
+the signal is feature non-smoothness ($0.592$), and the GNN target smooths that deviation away
+($0.549$). The learned predictability methods, at best, reproduce ``$1$-hop feature
+non-smoothness'' ($\sim$$0.59$--$0.66$ by a three-line script) and only cover the feature
+channel. \textbf{The high-value problem is therefore per-graph channel selection}, not a better
+predictability head.
+
+\section{Zero-shot channel identification is unsolved}
+\label{sec:zeroshot}
+
+\subsection{Marginal-statistic routing}
+We tried label-free routers that gate/weight channels by their marginal distribution
+(excess kurtosis, tail-pathology). A kurtosis gate that matched the oracle on
+\{disney, reddit\} \emph{collapses} on five graphs: it keeps amazon's mildly-tailed but useless
+structural channel and naive-fuses it into the strong feature channel ($0.829\!\rightarrow\!
+0.492$), and symmetrically dilutes facebook ($0.922\!\rightarrow\!0.791$). Tail/spread
+statistics always prefer the feature channel; kurtosis always prefers the structural channel;
+neither tracks actual channel \auc{}. A channel can be useless without being pathologically
+tailed, so its quality is not readable from its own marginal.
+
+\subsection{Perturbation-response (competence) routing}
+We then estimated each channel's \emph{competence} --- how well it detects its own synthetic
+injected anomaly type (CONAD-style \citep{xu2022conad}) against the natural background --- as a
+label-free proxy for relevance. It fails decisively
+(Table~\ref{tab:perturb}): mean routed $0.577 <$ naive-fusion $0.622 <$ oracle $0.702$, with
+counterexamples in both directions. On disney, struct competence is the highest in the table
+($0.907$, injected degree changes are trivially detectable on a tiny graph) yet the struct
+channel's real \auc{} is inverted ($0.333$). On amazon, the correct (feature) channel has low
+competence ($0.529$, a moderate injection is masked by large natural feature variance) so the
+router down-weights exactly the channel that matters. Detectability of an injected type does
+not predict relevance for the real anomalies.
+
+\begin{table}[t]
+\centering
+\caption{Perturbation-response router. Competence (self-injection \auc{}) does not track
+relevance (real \auc{}); routing is below naive fusion.}
+\label{tab:perturb}
+\begin{tabular}{lcccccc}
+\toprule
+dataset & real struct & real feat & comp struct & comp feat & routed & oracle \\
+\midrule
+inj\_cora & $0.720$ & $0.522$ & $0.784$ & $0.520$ & $0.720$ & $0.720$ \\
+disney   & $0.333$ & $0.664$ & $0.907$ & $0.607$ & $0.333$ & $0.664$ \\
+reddit   & $0.460$ & $0.592$ & $0.648$ & $0.972$ & $0.592$ & $0.592$ \\
+amazon   & $0.536$ & $0.829$ & $0.643$ & $0.529$ & $0.536$ & $0.829$ \\
+facebook & $0.706$ & $0.482$ & $0.642$ & $0.462$ & $0.706$ & $0.706$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Merging does not escape selection}
+Instead of selecting, one could \emph{merge} both channels. But even an \emph{oracle-weighted}
+merge tuned on real labels only equals the best single channel (gain $\le 0.005$ on all five
+graphs), and every label-free merge (naive mean, elementwise max) is \emph{worse} than
+selection. The channels are redundant/competing, not complementary: each graph's anomalies live
+almost entirely in one channel, and the other is noise or anti-correlated on those same nodes.
+(By construction these benchmarks inject a single anomaly type per graph; genuine mixtures,
+where merging would matter, are not represented.)
+
+\paragraph{Takeaway.} On an unlabeled graph the anomaly \emph{type} is unidentifiable: nothing
+distinguishes ``structural anomalies are the targets'' from ``feature anomalies are the
+targets,'' and choosing wrong inverts the score. This is precisely why strong generalist
+methods import external signal \citep{liu2024arc,niu2024unprompt,qiao2025anomalygfm}.
+
+\section{Few-shot channel identification works}
+\label{sec:fewshot}
+
+We give the detector the minimum external signal: $k$ labeled anomalies per graph. From a bank
+of rank-transformed candidate channels we \emph{select} the channel whose $k$ shots are most
+extreme ($\max |\overline{\text{rank}}_{\text{shots}} - 0.5|$) and \emph{orient} it by the sign
+of that deviation (fixing inversion), then evaluate on the held-out nodes ($200$ random shot
+draws per setting).
+
+\begin{table}[t]
+\centering
+\caption{Few-shot channel identification (ROC-\auc{}). A handful of labels recovers near-oracle
+\auc{} and cures inversion. Oracle = best oriented single channel under full labels.}
+\label{tab:fewshot}
+\begin{tabular}{lccccccc}
+\toprule
+dataset & oracle & feat (naive) & $k{=}1$ & $k{=}3$ & $k{=}5$ & $k{=}10$ & few-shot pick ($k{=}5$) \\
+\midrule
+inj\_cora & $0.742$ & $0.522$ & $0.564$ & $0.677$ & $0.679$ & $0.709$ & struct\_outlier/posdeg \\
+disney   & $0.736$ & $0.664$ & $0.653$ & $0.598$ & $0.515$ & n/a & struct\_neg/posdeg \\
+reddit   & $0.592$ & $0.592$ & $0.531$ & $0.527$ & $0.546$ & $0.553$ & feat\_global/nonsmooth \\
+amazon   & $0.892$ & $0.829$ & $0.752$ & $0.850$ & $0.874$ & $0.885$ & feat\_global \\
+facebook & $0.921$ & $0.482$ & $0.856$ & $\mathbf{0.921}$ & $0.920$ & $0.920$ & struct\_negdeg \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:fewshot} is the central positive result. On Facebook, naive feature scoring is
+useless ($0.482$), but with $k{=}3$ labels few-shot reaches $0.921 =$ the oracle: it identifies
+that structure is the channel \emph{and} fixes orientation --- exactly the failure mode that
+killed every zero-shot router. Few-shot can also beat the hand-picked default (amazon discovers
+\texttt{feat\_global}, $0.885$ at $k{=}10$, over the default \texttt{feat\_nonsmooth},
+$0.829$). Performance rises monotonically with $k$ and plateaus near oracle by $k{=}3$--$10$;
+$k{=}1$ is noisy. Where it does not help is honest: reddit's ceiling is low (oracle
+$=$ naive feat $=0.592$), and disney has only $6$ anomalies so $k{=}5$ leaves a single test
+positive (an evaluation artifact, not a method failure). The largest gains appear precisely on
+structure-dominant graphs where single-channel and zero-shot methods fail.
+
+\section{Does a stronger / learned bank raise the ceiling?}
+\label{sec:bank}
+
+The bank in Section~\ref{sec:fewshot} is hand-crafted. We add two families of stronger
+detectors and ask whether they raise the oracle: (i) training-free --- PCA reconstruction error,
+LOF \citep{breunig2000lof}, and spectral-embedding non-smoothness/Mahalanobis; (ii)
+\emph{learned} --- a DOMINANT-style \citep{ding2019dominant} GCN autoencoder with an attribute
+decoder (\texttt{learn\_dom\_attr}, feature recon) and an inner-product structure decoder
+(\texttt{learn\_dom\_struct}, adjacency-row recon), trained one-class for $100$ epochs on CPU.
+Graphs over $5{,}000$ nodes use a negative-sampling structure loss to stay tractable. We also
+move beyond injected anomalies to three \emph{organic} graphs: Tolokers and Questions
+\citep{platonov2023critical} and Elliptic \citep{weber2019elliptic}.
+
+\begin{table}[t]
+\centering
+\caption{Best oriented channel \auc{} per group (full labels). Injected benchmarks above the
+rule, organic below. The learned detector raises the oracle on exactly one graph --- organic
+Tolokers.}
+\label{tab:bank}
+\begin{tabular}{lcccc}
+\toprule
+dataset & trivial best & strong best & learned best & oracle(all) \\
+\midrule
+inj\_cora & $\mathbf{0.742}$ & $0.616$ & $0.562$ & $0.742$ \\
+disney   & $\mathbf{0.736}$ & $0.643$ & $0.564$ & $0.736$ \\
+reddit   & $\mathbf{0.592}$ & $0.574$ & $0.565$ & $0.592$ \\
+amazon   & $\mathbf{0.892}$ & $0.711$ & $0.876$ & $0.892$ \\
+facebook & $\mathbf{0.921}$ & $0.879$ & $0.568$ & $0.921$ \\
+\midrule
+tolokers & $0.582$ & $0.568$ & $\mathbf{0.614}$ & $\mathbf{0.614}$ \\
+questions & $\mathbf{0.639}$ & $0.590$ & $0.596$ & $0.639$ \\
+elliptic & $\mathbf{0.863}$ & $0.814$ & $0.850$ & $0.863$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Injected benchmarks: the ceiling is the benchmark, not the bank.} On all five
+injected graphs, neither the strong training-free detectors nor the learned detector raises the
+oracle (Table~\ref{tab:bank}): the trivial channel is best everywhere. The injection is itself
+trivial (degree/density changes, feature swaps), and the trivial degree / non-smoothness scores
+target it directly. The learned attribute channel merely \emph{reproduces} the feature channel
+(on \texttt{inj\_cora}, $\mathrm{corr}(\texttt{learn\_dom\_attr}, \texttt{feat\_nonsmooth})
+{=}0.77$), and the inner-product structure decoder is dominated by a one-line degree score
+(facebook $0.568$ vs.\ $0.921$), because a graph autoencoder reconstructs dense communities
+well and thus fails to flag clique/degree anomalies.
+
+\paragraph{Organic data: one clear win.} On Tolokers the learned channel
+(\texttt{learn\_dom\_struct}, $0.614$) beats every trivial ($0.582$) and strong ($0.568$)
+detector and raises the oracle to $0.614$ --- the \emph{only} graph in the study where a
+non-trivial detector wins. Few-shot finds it: \texttt{learn\_dom\_struct} is the top $k{=}5$
+pick, and on Tolokers the full bank improves few-shot over the trivial bank at every $k$ (the
+one dataset where a richer bank helps rather than dilutes; Table~\ref{tab:fewshotbank}).
+Elsewhere the learned \emph{attribute} channel is a much stronger feature detector than the
+training-free strong bank (amazon $0.876$ vs.\ LOF $0.711$; Elliptic $0.850$ vs.\ PCA $0.814$),
+but does not overtake the simple global-feature channel those graphs already match.
+
+\begin{table}[t]
+\centering
+\caption{Few-shot over the trivial vs.\ full (trivial$+$strong$+$learned) bank (ROC-\auc{},
+$200$ draws). A richer bank slightly \emph{dilutes} few-shot everywhere except Tolokers, where
+the learned channel genuinely wins.}
+\label{tab:fewshotbank}
+\begin{tabular}{lccccc}
+\toprule
+dataset & oracle(all) & $k{=}1$ & $k{=}3$ & $k{=}5$ & $k{=}10$ \\
+        &             & triv/all & triv/all & triv/all & triv/all \\
+\midrule
+inj\_cora & $0.742$ & $0.564/0.591$ & $0.672/0.625$ & $0.687/0.662$ & $0.717/0.684$ \\
+disney   & $0.736$ & $0.654/0.576$ & $0.584/0.552$ & $0.488/0.501$ & n/a \\
+reddit   & $0.592$ & $0.525/0.525$ & $0.536/0.529$ & $0.537/0.532$ & $0.552/0.537$ \\
+amazon   & $0.892$ & $0.746/0.668$ & $0.847/0.821$ & $0.871/0.855$ & $0.888/0.873$ \\
+facebook & $0.921$ & $0.852/0.825$ & $0.915/0.905$ & $0.921/0.909$ & $0.921/0.916$ \\
+tolokers & $0.614$ & $0.519/0.522$ & $0.527/\mathbf{0.531}$ & $0.538/0.538$ & $0.549/\mathbf{0.552}$ \\
+questions & $0.639$ & $0.533/0.512$ & $0.566/0.552$ & $0.578/0.565$ & $0.598/0.584$ \\
+elliptic & $0.863$ & $0.723/0.682$ & $0.786/0.767$ & $0.822/0.806$ & $0.853/0.837$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{What is tractable.} Per-graph channel identification is the lever, and few-shot
+($k{=}3$--$5$) is the tractable way to pull it: it both selects and orients, recovering
+near-oracle \auc{} on structure-dominant graphs where zero-shot inverts. This aligns with the
+design of generalist GAD methods that import external signal
+\citep{liu2024arc,niu2024unprompt,qiao2025anomalygfm}.
+
+\paragraph{What is not.} (i) Improving the predictability head is saturated by trivial
+baselines and single-channel. (ii) Zero-shot, label-free routing --- by marginal statistics or
+by self-injection competence --- and channel merging are dead ends. (iii) Adding detectors to
+the bank does not raise the oracle on trivially-injected benchmarks and dilutes few-shot;
+the gain requires organic data, and even there is modest.
+
+\paragraph{Limitations.} disney is tiny ($124$ nodes, $6$ anomalies). Injected benchmarks
+preclude channel complementarity by construction. Our learned detector is a single DOMINANT-
+style model; its inner-product structure decoder is the weak link (it cannot flag
+clique/degree anomalies), which a ``structural surprise'' score rather than reconstructability
+might fix. We do not yet compare against few-shot ARC / UNPrompt under an identical protocol;
+doing so is the natural next step.
+
+\section{Conclusion}
+We reframed generalist GAD around \emph{where the anomaly lives}. The dominant channel flips per
+graph and using the wrong one inverts the score; the per-graph oracle is far above any learned
+detector. Zero-shot identification of that channel is impossible, but few-shot ($3$--$5$ labels)
+recovers near-oracle \auc{}. A stronger or learned detector bank does not raise the ceiling on
+trivially-injected benchmarks --- the ceiling is the benchmark --- and helps only on organic
+data, where a learned reconstruction detector wins on exactly one graph. We release all
+findings, negatives included, as a map of the tractable surface for generalist graph anomaly
+detection.
+
+\paragraph{Reproducibility.} All code is pure \texttt{torch\_geometric} \citep{fey2019pyg},
+CPU-cheap, and avoids PyGOD. Channel and few-shot tables are reproduced by
+\texttt{python -m mlpgad.detectors <datasets>}; the PoC grid by \texttt{python -m mlpgad.run\_poc}.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

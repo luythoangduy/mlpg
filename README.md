@@ -82,6 +82,17 @@ facebook 0.482 → 0.921), which is the direction worth pursuing.
    selection and the gap **grows with k** — except where one oriented channel dominates
    (Elliptic), where selection wins.
 
+10. **Cross-graph meta-router ([METAROUTER.md](METAROUTER.md)) — orientation is unlearnable.**
+    Turning the failed zero-shot router into a supervised leave-one-graph-out problem (n=8)
+    still fails: a 1-NN meta-learner over label-free graph meta-features does **not** beat a
+    majority baseline at predicting a channel's per-graph **orientation** (the signs are
+    4/4-balanced across graphs), channel-*family* is only marginally predictable (6/8 vs 5/8),
+    and downstream both zero-shot meta-routers (0.364 / 0.469) fall **below even a naive fixed
+    detector** (0.530) and far below few-shot (0.674; oracle 0.750). This extends the zero-shot
+    impossibility from single-graph to cross-graph and pinpoints **orientation** as the
+    specifically unlearnable part — the strongest statement of why a few target labels are
+    necessary.
+
 ### Per-graph channel AUC (learning-free channels)
 
 | dataset  | struct (`-deg`) | feat (1-hop non-smooth) | oracle (best) | best *learned* method |
@@ -133,6 +144,7 @@ mlpgad/
   fewshot_channel.py      few-shot channel identification experiment (positive)
   detectors.py            trivial + strong (training-free) + learned detector bank + tables
   orientation.py          orientation-vs-selection decomposition + selection-vs-logistic
+  metarouter.py           cross-graph LOGO meta-router probe (orientation unlearnable)
   configs/default.yaml    experiment config
   tests/                  20 unit tests (pytest)
   RESULTS.md              PoC results + C1-C4 verdict
@@ -144,6 +156,7 @@ mlpgad/
   BANK.md                 stronger training-free detector bank (negative on injected benchmarks)
   LEARNED.md              learned detector + organic datasets (one organic win: Tolokers)
   ORIENTATION.md          orientation vs selection; selection vs PU-logistic combination
+  METAROUTER.md           cross-graph meta-router probe (orientation unlearnable, negative)
   docs/                   approved design spec
   results/poc_results.csv raw per-seed AUC/AP
 ```

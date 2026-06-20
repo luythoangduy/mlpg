@@ -89,8 +89,9 @@ problem.
   (Section~\ref{sec:bank}).
   \item We isolate \textbf{orientation} as a first-class, per-graph problem: on inverted
   graphs, fixing the channel's \emph{sign} (not selecting it) accounts for $88$--$99\%$ of the
-  few-shot gain, and the same channel flips sign across graphs --- something fixed-direction GAD
-  and zero-shot channel routers ignore (Section~\ref{sec:orientation}).
+  few-shot gain, the same channel flips sign across graphs, and orientation is unlearnable even
+  by cross-graph meta-learning --- the strongest statement of why a few labels are necessary
+  (Section~\ref{sec:orientation}).
 \end{itemize}
 
 \section{Related Work}
@@ -414,6 +415,20 @@ signal is concentrated, mixing channels only adds noise. We note the asymmetry h
 selection uses only the $k$ positives while the logistic also exploits the unlabeled pool ---
 so this is ``a PU linear model over the bank beats a positive-only single-channel rule,'' not
 combination beating selection in a vacuum.
+
+\paragraph{Orientation does not transfer across graphs either.} A natural rescue is to learn
+orientation from a \emph{corpus}: turn the failed zero-shot router into supervised
+leave-one-graph-out (LOGO) meta-learning over label-free graph meta-features. On our eight
+graphs this fails decisively. A 1-NN meta-learner does not beat a majority baseline at
+predicting a channel's per-graph sign --- the signs are $4/4$-balanced across graphs, so there
+is no canonical direction to encode --- while channel \emph{family} is only marginally
+predictable ($6/8$ vs.\ $5/8$). Downstream, both zero-shot meta-routers ($0.364$, $0.469$ mean
+\auc{}) fall \emph{below} a naive fixed detector ($0.530$) and far below few-shot ($0.674$;
+oracle $0.750$), with catastrophic 1-NN inversions (amazon $0.108$). This extends the zero-shot
+impossibility from a single graph to the cross-graph setting and isolates \emph{orientation} as
+the specifically unlearnable component: the sign few-shot recovers is information that is simply
+not present in the graph, on its own or by analogy to others. ($n{=}8$ LOGO is a probe, but the
+balanced-sign target is a structural fact, not a sample-size artifact.)
 
 \section{Discussion}
 \label{sec:discussion}

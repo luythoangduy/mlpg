@@ -1,0 +1,7 @@
+torch>=2.0
+torch_geometric>=2.3
+scipy
+scikit-learn
+numpy
+pyyaml
+pytest

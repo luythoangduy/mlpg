@@ -32,6 +32,13 @@ no simple unsupervised statistic selects the right channel across graphs.
    (amazon 0.49, facebook 0.79 vs oracle 0.83/0.92). Choosing a channel from its own
    marginal distribution is unsolved.
 
+4. **Perturbation-response router ([ROUTER_PERTURBATION.md](ROUTER_PERTURBATION.md)):**
+   estimating channel *competence* by self-injection also **fails** — routed 0.577 <
+   naive-fusion 0.622 < oracle 0.702, with counterexamples both ways (disney: high
+   competence yet inverted relevance; amazon: low competence yet the relevant channel).
+   Competence (detectability of injected type) does not predict relevance (real-anomaly
+   channel).
+
 ### Per-graph channel AUC (learning-free channels)
 
 | dataset  | struct (`-deg`) | feat (1-hop non-smooth) | oracle (best) | best *learned* method |
@@ -50,11 +57,14 @@ amazon feature) it is *far* above any learned predictability method.
 - **Out:** "make masked latent predictability better" — saturated by trivial baselines,
   single-channel (feature) only, inverts on structure-dominant graphs. The latent-vs-raw
   target distinction adds nothing.
-- **In (open):** **per-graph adaptive channel routing**, validated on a multi-graph
-  benchmark (n=2 demonstrably overfits). Proposed next experiment: estimate channel quality
-  by *perturbation response* — inject synthetic structural and feature anomalies separately,
-  weight each channel by how well it detects its own injected type (label-free). See the end
-  of [ROUTER.md](ROUTER.md).
+- **Out (now tested):** *zero-shot, label-free* per-graph channel routing. Both marginal-
+  statistic routing and perturbation-response competence routing fail (below naive fusion).
+  On a new graph with no labels the anomaly type is unidentifiable, and choosing the wrong
+  channel inverts the score.
+- **In (open, tractable):** **few-shot channel identification** — with 1–5 labeled
+  anomalies per graph, pick/weight the channel whose ranking they top (oracle shows
+  0.59–0.92). This matches how strong generalist GAD methods (ARC, UNPrompt, AnomalyGFM)
+  import external signal about what is anomalous.
 
 ## Repository layout
 
@@ -68,11 +78,13 @@ mlpgad/
   models/unprompt_baseline.py   neighborhood-predictability of raw attribute (UNPrompt-style)
   train.py                one-class trainer + multi-round node scorer
   run_poc.py              grid runner {dataset x method x toggle x seed} -> CSV
+  router_perturbation.py  perturbation-response channel-router experiment
   configs/default.yaml    experiment config
   tests/                  15 unit tests (pytest)
   RESULTS.md              PoC results + C1-C4 verdict
   INVESTIGATION.md        channel crossover analysis
-  ROUTER.md               channel-router PoC (negative, with next step)
+  ROUTER.md               channel-router PoC, marginal statistics (negative)
+  ROUTER_PERTURBATION.md  perturbation-response router (negative) + few-shot reframe
   docs/                   approved design spec
   results/poc_results.csv raw per-seed AUC/AP
 ```

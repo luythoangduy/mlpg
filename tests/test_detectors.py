@@ -21,10 +21,20 @@ def test_strong_bank_keys_and_ranks():
         assert float(r.min()) >= 0.0 and float(r.max()) <= 1.0
 
 
-def test_all_bank_is_union_of_trivial_and_strong():
+def test_all_bank_is_union_of_trivial_strong_learned():
     d = _toy()
     triv = build_bank(d, level="trivial")
     strong = build_bank(d, level="strong")
+    learned = build_bank(d, level="learned")  # name=None -> trains fresh, no cache
     allb = build_bank(d, level="all")
-    assert set(allb) == set(triv) | set(strong)
-    assert len(allb) == len(triv) + len(strong)
+    assert set(allb) == set(triv) | set(strong) | set(learned)
+    assert len(allb) == len(triv) + len(strong) + len(learned)
+
+
+def test_learned_bank_keys_and_ranks():
+    d = _toy()
+    learned = build_bank(d, level="learned")
+    assert {"learn_dom_attr", "learn_dom_struct"} == set(learned)
+    for r in learned.values():
+        assert r.shape == (60,)
+        assert float(r.min()) >= 0.0 and float(r.max()) <= 1.0

@@ -16,6 +16,8 @@ no gradient training) detectors spanning feature and structural anomaly hypothes
 Run: python -m mlpgad.detectors
 """
 
+import os
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -26,10 +28,13 @@ from torch_geometric.utils import to_scipy_sparse_matrix
 
 from mlpgad.data.loaders import load_dataset
 from mlpgad.fewshot_channel import build_channels, fewshot_select
+from mlpgad.models.dominant import train_dominant
 
 UN = r"D:\notes\graph_anomaly\UNPrompt\Datasets"
 CR = r"D:\notes\graph_anomaly\data_cache\cora"
+PYG = r"D:\notes\graph_anomaly\data_cache"
 DATASETS = ["inj_cora", "disney", "reddit", "amazon", "facebook"]
+_CACHE = os.path.join(os.path.dirname(__file__), "results", "learned_cache")
 
 
 def _z(a):
@@ -97,12 +102,33 @@ def _strong_channels(data):
     }
 
 
-def build_bank(data, level="all"):
+def learned_channels(data, name=None, seed=0, force_train=False, **kw):
+    """Raw per-node learned (DOMINANT) recon errors, cached by (name, seed) when name given.
+
+    Training is the slow part, so results are cached to results/learned_cache/<name>_<seed>.npz.
+    Pass name=None (e.g. toy graphs / tests) to always train fresh without touching the cache.
+    """
+    if name is not None and not force_train:
+        path = os.path.join(_CACHE, "%s_%d.npz" % (name, seed))
+        if os.path.exists(path):
+            d = np.load(path)
+            return {k: d[k] for k in d.files}
+    raw = train_dominant(data, seed=seed, **kw)
+    if name is not None:
+        os.makedirs(_CACHE, exist_ok=True)
+        np.savez(os.path.join(_CACHE, "%s_%d.npz" % (name, seed)), **raw)
+    return raw
+
+
+def build_bank(data, level="all", name=None, seed=0, force_train=False):
     bank = {}
     if level in ("trivial", "all"):
         bank.update(build_channels(data))  # already rank-normalized
     if level in ("strong", "all"):
         bank.update({k: _rank(v) for k, v in _strong_channels(data).items()})
+    if level in ("learned", "all"):
+        raw = learned_channels(data, name=name, seed=seed, force_train=force_train)
+        bank.update({k: _rank(v) for k, v in raw.items()})
     return bank
 
 
@@ -128,26 +154,73 @@ def _fewshot_auc(ranks, y, k, trials, rng):
     return float(np.mean(out))
 
 
-def run(k=5, trials=200, seed=0):
-    rng = np.random.default_rng(seed)
-    print("%-9s | oracle(triv  strong) | few-shot k=%d (triv  strong) | strong pick"
-          % ("dataset", k))
-    for name in DATASETS:
-        d = load_dataset(name, unprompt_dir=UN, cora_root=CR, seed=0)
+def _load(name, seed=0):
+    return load_dataset(name, unprompt_dir=UN, cora_root=CR, pyg_root=PYG, seed=seed)
+
+
+def _best_in_group(data, level, y, name, seed):
+    """Best oriented AUC and its channel within a bank level (full labels)."""
+    best_nm, best_a = None, 0.5
+    for nm, rr in build_bank(data, level, name=name, seed=seed).items():
+        a = roc_auc_score(y, rr)
+        a = max(a, 1.0 - a)
+        if a > best_a:
+            best_nm, best_a = nm, a
+    return best_nm, best_a
+
+
+def channel_table(datasets, seed=0):
+    """Per-channel-group oracle: how the learned bank compares to trivial/strong."""
+    print("\n== best oriented channel AUC per group (full labels) ==")
+    print("%-10s | trivial        | strong         | learned        | oracle(all)"
+          % "dataset")
+    for name in datasets:
+        d = _load(name, seed)
         y = d.y.numpy().astype(int)
-        triv = build_bank(d, "trivial")
-        allb = build_bank(d, "all")
-        otv, ost = _oracle(triv, y), _oracle(allb, y)
-        ftv = _fewshot_auc(triv, y, k, trials, rng)
-        fst = _fewshot_auc(allb, y, k, trials, rng)
-        # which strong channel does few-shot favor (full-label proxy)
-        best = max(((nm, max(roc_auc_score(y, rr), 1 - roc_auc_score(y, rr)))
-                    for nm, rr in build_bank(d, "strong").items()),
-                   key=lambda t: t[1])
-        fmt = lambda v: "n/a " if v is None else "%.3f" % v
-        print("%-9s |  %.3f  %.3f      |    %s  %s          | %s (%.3f)"
-              % (name, otv, ost, fmt(ftv), fmt(fst), best[0], best[1]))
+        bt = _best_in_group(d, "trivial", y, name, seed)
+        bs = _best_in_group(d, "strong", y, name, seed)
+        bl = _best_in_group(d, "learned", y, name, seed)
+        oall = _oracle(build_bank(d, "all", name=name, seed=seed), y)
+        cell = lambda t: "%.3f %-9s" % (t[1], (t[0] or "-")[:9])
+        print("%-10s | %s | %s | %s | %.3f"
+              % (name, cell(bt), cell(bs), cell(bl), oall))
+
+
+def fewshot_table(datasets, ks=(1, 3, 5, 10), trials=200, seed=0):
+    """Few-shot selection over trivial vs full (trivial+strong+learned) bank."""
+    rng = np.random.default_rng(seed)
+    print("\n== few-shot channel selection (oriented AUC, %d draws) ==" % trials)
+    print("%-10s | oracle(all) |" % "dataset" +
+          "".join(" k=%-2d(triv/all)" % k for k in ks) + " | top pick (all,k=5)")
+    for name in datasets:
+        d = _load(name, seed)
+        y = d.y.numpy().astype(int)
+        triv = build_bank(d, "trivial", name=name, seed=seed)
+        allb = build_bank(d, "all", name=name, seed=seed)
+        line = "%-10s |    %.3f    |" % (name, _oracle(allb, y))
+        picks = {}
+        for k in ks:
+            ft = _fewshot_auc(triv, y, k, trials, rng)
+            fa = _fewshot_auc(allb, y, k, trials, rng)
+            f = lambda v: "n/a " if v is None else "%.3f" % v
+            line += "  %s/%s" % (f(ft), f(fa))
+            if k == 5 and fa is not None:
+                for _ in range(trials):
+                    shots = rng.choice(np.where(y == 1)[0], size=k, replace=False)
+                    cn, _s = fewshot_select(allb, shots)
+                    picks[cn] = picks.get(cn, 0) + 1
+        top = sorted(picks.items(), key=lambda x: -x[1])[:2]
+        line += " | " + ", ".join("%s:%d%%" % (n, 100 * c // trials) for n, c in top)
+        print(line)
+
+
+def run(datasets=None, seed=0):
+    datasets = datasets or DATASETS
+    channel_table(datasets, seed=seed)
+    fewshot_table(datasets, seed=seed)
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    ds = sys.argv[1:] if len(sys.argv) > 1 else None
+    run(ds)

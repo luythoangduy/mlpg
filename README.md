@@ -70,6 +70,18 @@ facebook 0.482 → 0.921), which is the direction worth pursuing.
    best trivial channel. Non-trivial detectors matter exactly where the benchmark stops being
    trivial.
 
+9. **Orientation vs selection, and selection vs combination ([ORIENTATION.md](ORIENTATION.md)).**
+   Decomposing the few-shot gain shows that *which* of selection/orientation dominates is
+   **per-graph**: fixing the **sign** (orientation) accounts for 88–99% of the achievable gain
+   on graphs whose best channel is inverted (Elliptic, Facebook) and ~0% where the natural sign
+   is already correct. Elliptic is the showcase — the oracle channel with the naive `+1` sign
+   gives **0.137** (far below random), and few-shot orientation alone recovers **~0.84**. The
+   *same* channel flips sign across graphs (`feat_global` +0.365 on amazon vs −0.328 on
+   Elliptic), the orientation problem that "high = anomaly" GAD and zero-shot routers ignore.
+   Separately, a cheap **PU logistic over the whole bank** usually beats single-channel
+   selection and the gap **grows with k** — except where one oriented channel dominates
+   (Elliptic), where selection wins.
+
 ### Per-graph channel AUC (learning-free channels)
 
 | dataset  | struct (`-deg`) | feat (1-hop non-smooth) | oracle (best) | best *learned* method |
@@ -120,6 +132,7 @@ mlpgad/
   router_perturbation.py  perturbation-response channel-router experiment
   fewshot_channel.py      few-shot channel identification experiment (positive)
   detectors.py            trivial + strong (training-free) + learned detector bank + tables
+  orientation.py          orientation-vs-selection decomposition + selection-vs-logistic
   configs/default.yaml    experiment config
   tests/                  20 unit tests (pytest)
   RESULTS.md              PoC results + C1-C4 verdict
@@ -130,6 +143,7 @@ mlpgad/
   FEWSHOT.md              few-shot channel identification (positive, working direction)
   BANK.md                 stronger training-free detector bank (negative on injected benchmarks)
   LEARNED.md              learned detector + organic datasets (one organic win: Tolokers)
+  ORIENTATION.md          orientation vs selection; selection vs PU-logistic combination
   docs/                   approved design spec
   results/poc_results.csv raw per-seed AUC/AP
 ```

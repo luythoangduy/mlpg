@@ -87,6 +87,10 @@ problem.
   benchmarks (the ceiling is the benchmark, not the bank), but --- modestly and unevenly --- on
   organic data, where a learned reconstruction detector wins on one graph
   (Section~\ref{sec:bank}).
+  \item We isolate \textbf{orientation} as a first-class, per-graph problem: on inverted
+  graphs, fixing the channel's \emph{sign} (not selecting it) accounts for $88$--$99\%$ of the
+  few-shot gain, and the same channel flips sign across graphs --- something fixed-direction GAD
+  and zero-shot channel routers ignore (Section~\ref{sec:orientation}).
 \end{itemize}
 
 \section{Related Work}
@@ -356,14 +360,72 @@ elliptic & $0.863$ & $0.723/0.682$ & $0.786/0.767$ & $0.822/0.806$ & $0.853/0.83
 \end{tabular}
 \end{table}
 
+\section{Orientation vs.\ selection, and selection vs.\ combination}
+\label{sec:orientation}
+
+Few-shot channel identification does two things at once --- pick the channel and fix its sign.
+We decompose which matters, and ask whether picking one channel is enough.
+
+\paragraph{Orientation is a first-class, per-graph problem.} Along the path
+naive$\,\to\,$few/few$\,\to\,$oracle (where \emph{naive} is few-shot selection with the
+default $+1$ sign, and \emph{few/few} adds few-shot orientation), the orientation share is
+$(\text{few/few}-\text{naive})/(\text{oracle}-\text{naive})$. It is \emph{graph-dependent}:
+orientation accounts for $88$--$99\%$ of the achievable gain on graphs whose best channel is
+inverted (Elliptic, Facebook) and ${\sim}0\%$ where the natural sign is already correct
+(amazon, reddit, questions). Elliptic is the clean showcase: its oracle channel
+(\texttt{feat\_global}) ranks anomalies at the \emph{low} end, so naive $+1$ scoring gives
+$0.137$ --- far below random --- and few-shot orientation alone recovers it to ${\sim}0.84$
+(Table~\ref{tab:orient}). No amount of channel \emph{selection} helps when the sign is wrong:
+the oracle channel with the naive sign stays at $0.137$ for every $k$.
+
+\begin{table}[t]
+\centering
+\caption{Orientation vs.\ selection ($k{=}5$, oriented ROC-\auc{}). \emph{oraSel/+1} is the
+oracle channel scored with the naive $+1$ sign; on Elliptic it is $0.137$, exposing inversion.}
+\label{tab:orient}
+\begin{tabular}{lccccc}
+\toprule
+dataset & naive(+1) & few/few & oraSel/+1 & oracle & orient share \\
+\midrule
+inj\_cora & $0.534$ & $0.671$ & $0.742$ & $0.742$ & $66\%$ \\
+amazon   & $0.851$ & $0.851$ & $0.892$ & $0.892$ & $1\%$ \\
+facebook & $0.626$ & $0.911$ & $0.921$ & $0.921$ & $\mathbf{97\%}$ \\
+tolokers & $0.503$ & $0.542$ & $0.614$ & $0.614$ & $35\%$ \\
+elliptic & $\mathbf{0.219}$ & $0.787$ & $\mathbf{0.137}$ & $0.863$ & $\mathbf{88\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The mechanism is a sign crossover: the \emph{same} channel inverts across graphs. The signed
+separation $\overline{\text{rank}}(\text{anomalies})-0.5$ of \texttt{feat\_global} is $+0.365$
+on amazon (anomalies have high feature norm) but $-0.328$ on Elliptic (low feature norm); of
+\texttt{struct\_negdeg} it is $+0.412$ on Facebook (low-degree anomalies) but $-0.198$ on
+inj\_cora (high-degree clique anomalies). A fixed ``high score $=$ anomaly'' rule, and a
+zero-shot router that only \emph{selects} a channel, both fail here; the few-shot signal's
+essential job is fixing the sign --- the one thing genuinely unidentifiable without labels.
+
+\paragraph{Selecting one channel vs.\ a learned combination.} With the same $k$ labels we
+compare single-channel selection against a PU logistic regression over all ${\sim}11$ channels
+($k$ labeled anomalies $+$ $10k$ sampled pseudo-normals). The combination usually wins and the
+gap \emph{grows} with $k$ (inj\_cora $0.700\!\rightarrow\!0.811$ at $k{=}10$; Facebook,
+Questions, Tolokers similarly), refuting a naive overfitting worry. The exception is Elliptic,
+where a single oriented channel dominates and selection wins ($0.838$ vs.\ $0.821$): when the
+signal is concentrated, mixing channels only adds noise. We note the asymmetry honestly ---
+selection uses only the $k$ positives while the logistic also exploits the unlabeled pool ---
+so this is ``a PU linear model over the bank beats a positive-only single-channel rule,'' not
+combination beating selection in a vacuum.
+
 \section{Discussion}
 \label{sec:discussion}
 
 \paragraph{What is tractable.} Per-graph channel identification is the lever, and few-shot
 ($k{=}3$--$5$) is the tractable way to pull it: it both selects and orients, recovering
-near-oracle \auc{} on structure-dominant graphs where zero-shot inverts. This aligns with the
-design of generalist GAD methods that import external signal
-\citep{liu2024arc,niu2024unprompt,qiao2025anomalygfm}.
+near-oracle \auc{} on structure-dominant graphs where zero-shot inverts. The decomposition in
+Section~\ref{sec:orientation} sharpens this: on inverted graphs the binding constraint is
+\emph{orientation} (the sign), and a cheap PU logistic over the bank often beats single-channel
+selection once the sign is handled. This aligns with the design of generalist GAD methods that
+import external signal \citep{liu2024arc,niu2024unprompt,qiao2025anomalygfm}, and suggests that
+such routers should model channel \emph{orientation}, not only channel choice.
 
 \paragraph{What is not.} (i) Improving the predictability head is saturated by trivial
 baselines and single-channel. (ii) Zero-shot, label-free routing --- by marginal statistics or
